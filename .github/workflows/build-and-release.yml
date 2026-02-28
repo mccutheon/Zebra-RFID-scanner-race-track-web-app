@@ -1,0 +1,111 @@
+name: Build Executables and Release
+
+on:
+  push:
+    branches:
+      - main  # Change to '*' if you want on every push
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller flask sllurp
+
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller --onefile \
+            --add-data "templates;templates" \
+            --add-data "config.txt;." \
+            --name "rfid-race-app" \
+            rfid_app.py
+
+      - name: Rename artifact for OS
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            mv dist/rfid-race-app dist/rfid-race-app-linux
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            mv dist/rfid-race-app.exe dist/rfid-race-app-windows.exe
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            mv dist/rfid-race-app dist/rfid-race-app-macos
+          fi
+
+      - name: Upload artifact for release
+        uses: actions/upload-artifact@v4
+        with:
+          name: rfid-race-app-${{ matrix.os }}
+          path: dist/rfid-race-app-*
+
+  release:
+    name: Create Release and Upload Assets
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: Release v${{ github.run_number }}
+          draft: false
+          prerelease: false
+          body: |
+            Auto-generated release from push to main.
+            - rfid-race-app-linux (Linux)
+            - rfid-race-app-windows.exe (Windows)
+            - rfid-race-app-macos (macOS)
+
+      - name: Upload Linux executable
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/rfid-race-app-ubuntu-latest/rfid-race-app-linux
+          asset_name: rfid-race-app-linux
+          asset_content_type: application/octet-stream
+
+      - name: Upload Windows executable
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/rfid-race-app-windows-latest/rfid-race-app-windows.exe
+          asset_name: rfid-race-app-windows.exe
+          asset_content_type: application/octet-stream
+
+      - name: Upload macOS executable
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/rfid-race-app-macos-latest/rfid-race-app-macos
+          asset_name: rfid-race-app-macos
+          asset_content_type: application/octet-stream
