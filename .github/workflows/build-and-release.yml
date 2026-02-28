@@ -3,7 +3,7 @@ name: Build Executables and Release
 on:
   push:
     branches:
-      - main  # Change to '*' if you want on every push
+      - main
 
 jobs:
   build:
@@ -27,28 +27,38 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller flask sllurp
 
+      - name: Set data separator for OS
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            echo "SEP=;" >> $GITHUB_ENV
+          else
+            echo "SEP=:" >> $GITHUB_ENV
+          fi
+
       - name: Build executable with PyInstaller
+        shell: bash
         run: |
           pyinstaller --onefile \
-            --add-data "templates;templates" \
-            --add-data "config.txt;." \
-            --name "rfid-race-app" \
+            --add-data "templates${SEP}templates" \
+            --add-data "config.txt${SEP}." \
             rfid_app.py
 
       - name: Rename artifact for OS
+        shell: bash
         run: |
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            mv dist/rfid-race-app dist/rfid-race-app-linux
-          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
-            mv dist/rfid-race-app.exe dist/rfid-race-app-windows.exe
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            mv dist/rfid-race-app dist/rfid-race-app-macos
+          if [ "${{ runner.os }}" == "Linux" ]; then
+            mv dist/rfid_app dist/rfid-race-app-linux
+          elif [ "${{ runner.os }}" == "Windows" ]; then
+            mv dist/rfid_app.exe dist/rfid-race-app-windows.exe
+          elif [ "${{ runner.os }}" == "macOS" ]; then
+            mv dist/rfid_app dist/rfid-race-app-macos
           fi
 
       - name: Upload artifact for release
         uses: actions/upload-artifact@v4
         with:
-          name: rfid-race-app-${{ matrix.os }}
+          name: rfid-race-app-${{ runner.os }}
           path: dist/rfid-race-app-*
 
   release:
@@ -86,7 +96,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/rfid-race-app-ubuntu-latest/rfid-race-app-linux
+          asset_path: dist/rfid-race-app-Linux/rfid-race-app-linux
           asset_name: rfid-race-app-linux
           asset_content_type: application/octet-stream
 
@@ -96,7 +106,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/rfid-race-app-windows-latest/rfid-race-app-windows.exe
+          asset_path: dist/rfid-race-app-Windows/rfid-race-app-windows.exe
           asset_name: rfid-race-app-windows.exe
           asset_content_type: application/octet-stream
 
@@ -106,6 +116,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/rfid-race-app-macos-latest/rfid-race-app-macos
+          asset_path: dist/rfid-race-app-macOS/rfid-race-app-macos
           asset_name: rfid-race-app-macos
           asset_content_type: application/octet-stream
