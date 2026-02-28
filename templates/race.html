@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Race Lap Timer - Staggered Start</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; background-color: #121212; color: #ddd; }
+        #timer { font-size: 5.5rem; font-weight: bold; font-family: monospace; letter-spacing: 6px; }
+        .lap-time { font-family: monospace; font-size: 1.1rem; }
+        .table th { background-color: #1f1f1f; }
+        .leaderboard tr.first { background-color: #2a3d1f !important; font-weight: bold; }
+        .leaderboard tr.second { background-color: #3d3d1f !important; }
+        .leaderboard tr.third { background-color: #3d2a1f !important; }
+        .btn-lg { padding: 12px 28px; font-size: 1.25rem; }
+        .status-running { color: #28a745; font-weight: bold; }
+        .status-paused { color: #ffc107; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1>🏁 Race Lap Timer <small class="text-muted">(Staggered Start Mode)</small></h1>
+            <span id="status" class="badge bg-success fs-5">CONNECTED • Antenna 2 Active</span>
+        </div>
+
+        <!-- Session Name -->
+        <div class="input-group mb-3" style="max-width: 500px;">
+            <input id="sessionName" type="text" class="form-control form-control-lg" value="Moto 1">
+            <button class="btn btn-outline-light" onclick="saveSessionName()">Save Name</button>
+        </div>
+
+        <!-- Big Timer -->
+        <div class="card text-center mb-4 bg-dark border-light">
+            <div class="card-body">
+                <div id="timer" class="text-white">00:00.0</div>
+                <div id="raceStatus" class="fs-4 mt-2 status-paused">PRESS START TO BEGIN</div>
+            </div>
+        </div>
+
+        <!-- Control Buttons -->
+        <div class="d-flex flex-wrap gap-2 justify-content-center mb-5">
+            <button id="startBtn" class="btn btn-success btn-lg" onclick="startRace()">▶ START</button>
+            <button id="pauseBtn" class="btn btn-warning btn-lg" onclick="pauseRace()" style="display:none">⏸ PAUSE</button>
+            <button class="btn btn-danger btn-lg" onclick="resetRace()">RESET</button>
+            <button class="btn btn-primary btn-lg" onclick="finishRace()">🏁 FINISH RACE + EXPORT</button>
+            <button class="btn btn-secondary btn-lg" onclick="newRace()">NEW RACE</button>
+        </div>
+
+        <div class="row">
+            <!-- Leaderboard -->
+            <div class="col-lg-7">
+                <h3>Leaderboard <span id="riderCount" class="badge bg-secondary"></span></h3>
+                <table class="table table-dark table-striped leaderboard" id="leaderboard">
+                    <thead>
+                        <tr>
+                            <th>Pos</th>
+                            <th>Rider</th>
+                            <th>Laps</th>
+                            <th>Last Lap</th>
+                            <th>Effective Time</th>
+                            <th>Behind Leader</th>
+                        </tr>
+                    </thead>
+                    <tbody id="leaderboardBody"></tbody>
+                </table>
+            </div>
+
+            <!-- Top 3 Fastest Laps -->
+            <div class="col-lg-5">
+                <h3>Top 3 Fastest Laps</h3>
+                <table class="table table-dark table-striped" id="fastestLaps">
+                    <thead>
+                        <tr><th>#</th><th>Rider</th><th>Lap Time</th><th>Lap</th></tr>
+                    </thead>
+                    <tbody id="fastestBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Lap History -->
+        <h3 class="mt-5">Lap History (newest first)</h3>
+        <table class="table table-dark table-striped table-hover" id="historyTable">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Rider</th>
+                    <th>Event</th>
+                    <th>Lap Time</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+        </table>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let timerInterval = null;
+        let isRunning = false;
+
+        function playBeep(isStart = false) {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            osc.frequency.value = isStart ? 1200 : 850;
+            const gain = ctx.createGain();
+            gain.gain.value = 0.35;
+            osc.connect(gain).connect(ctx.destination);
+            osc.start();
+            setTimeout(() => osc.stop(), isStart ? 280 : 140);
+        }
+
+        function formatTime(seconds) {
+            const min = Math.floor(seconds / 60);
+            const sec = (seconds % 60).toFixed(1);
+            return `${min.toString().padStart(2, '0')}:${sec.padStart(4, '0')}`;
+        }
+
+        function updateTimer() {
+            fetch('/race_data')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.is_running && data.start_time) {
+                        const elapsed = (Date.now() / 1000 - data.start_time) + (data.paused_elapsed || 0);
+                        document.getElementById('timer').textContent = formatTime(elapsed);
+                    }
+                });
+        }
+
+        function refreshRace() {
+            fetch('/race_data')
+                .then(r => r.json())
+                .then(data => {
+                    isRunning = data.is_running;
+
+                    // Status and buttons
+                    document.getElementById('raceStatus').textContent = isRunning ? "🏁 RACE RUNNING" : "⏸ PAUSED";
+                    document.getElementById('raceStatus').className = isRunning ? "fs-4 mt-2 status-running" : "fs-4 mt-2 status-paused";
+                    document.getElementById('startBtn').style.display = isRunning ? 'none' : 'inline-block';
+                    document.getElementById('pauseBtn').style.display = isRunning ? 'inline-block' : 'none';
+
+                    // Timer
+                    if (isRunning && data.start_time) {
+                        if (!timerInterval) timerInterval = setInterval(updateTimer, 100);
+                    } else {
+                        clearInterval(timerInterval);
+                        timerInterval = null;
+                        const elapsed = data.paused_elapsed || 0;
+                        document.getElementById('timer').textContent = formatTime(elapsed);
+                    }
+
+                    // Leaderboard with staggered logic
+                    const riders = {};
+                    data.laps.forEach(l => {
+                        if (!riders[l.rfid_id]) {
+                            riders[l.rfid_id] = { name: l.name, laps: 0, startOffset: 0, lastElapsed: 0, lastLapTime: 0 };
+                        }
+                        if (l.label === "START") {
+                            riders[l.rfid_id].startOffset = l.elapsed;
+                        } else {
+                            riders[l.rfid_id].laps = l.lap_number;
+                            riders[l.rfid_id].lastLapTime = l.lap_time;
+                        }
+                        riders[l.rfid_id].lastElapsed = l.elapsed;
+                    });
+
+                    const sorted = Object.values(riders).sort((a, b) => {
+                        if (b.laps !== a.laps) return b.laps - a.laps;
+                        return (a.lastElapsed - a.startOffset) - (b.lastElapsed - b.startOffset);
+                    });
+
+                    let leaderEffective = sorted[0] ? (sorted[0].lastElapsed - sorted[0].startOffset) : 0;
+
+                    let html = '';
+                    sorted.forEach((r, i) => {
+                        const effective = r.lastElapsed - r.startOffset;
+                        const behind = (effective - leaderEffective).toFixed(1);
+                        html += `<tr class="${i < 3 ? ['first','second','third'][i] : ''}">
+                            <td>${i+1}</td>
+                            <td>${r.name}</td>
+                            <td><strong>${r.laps}</strong></td>
+                            <td class="lap-time">${r.lastLapTime.toFixed(2)}s</td>
+                            <td class="lap-time">${effective.toFixed(1)}s</td>
+                            <td class="text-end">${behind > 0 ? '+' + behind : behind}s</td>
+                        </tr>`;
+                    });
+                    document.getElementById('leaderboardBody').innerHTML = html || '<tr><td colspan="6" class="text-center py-4">No riders yet — scan on Antenna 2</td></tr>';
+                    document.getElementById('riderCount').textContent = Object.keys(riders).length + ' riders';
+
+                    // Top 3 Fastest Laps (only real laps)
+                    const realLaps = data.laps.filter(l => l.label !== "START").sort((a,b) => a.lap_time - b.lap_time).slice(0,3);
+                    let fhtml = '';
+                    realLaps.forEach((l,i) => {
+                        fhtml += `<tr><td>${i+1}</td><td>${l.name}</td><td class="lap-time">${l.lap_time.toFixed(2)}s</td><td>${l.label}</td></tr>`;
+                    });
+                    document.getElementById('fastestBody').innerHTML = fhtml || '<tr><td colspan="4" class="text-center">No completed laps yet</td></tr>';
+
+                    // History
+                    let hhtml = '';
+                    data.laps.slice().reverse().forEach(l => {
+                        const timeStr = new Date(l.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+                        hhtml += `<tr>
+                            <td>${timeStr}</td>
+                            <td>${l.name}</td>
+                            <td><strong>${l.label}</strong></td>
+                            <td class="lap-time">${l.lap_time.toFixed(2)}s</td>
+                            <td><button class="btn btn-sm btn-outline-danger" onclick="deleteLap(${l.timestamp})">Delete</button></td>
+                        </tr>`;
+                    });
+                    document.getElementById('historyBody').innerHTML = hhtml || '<tr><td colspan="5" class="text-center">No events yet</td></tr>';
+
+                    // Update status based on reader connection
+                    document.getElementById('status').className = 'badge bg-success fs-5';
+                    document.getElementById('status').textContent = 'CONNECTED • Antenna 2 Active';
+                })
+                .catch(() => {
+                    document.getElementById('status').className = 'badge bg-danger fs-5';
+                    document.getElementById('status').textContent = 'Reader offline';
+                });
+        }
+
+        // Button functions
+        function startRace() { fetch('/start_race', {method:'POST'}).then(refreshRace); }
+        function pauseRace() { fetch('/pause_race', {method:'POST'}).then(refreshRace); }
+        function resetRace() { if(confirm('Reset entire race?')) fetch('/reset_race', {method:'POST'}).then(refreshRace); }
+        function finishRace() { fetch('/finish_race', {method:'POST'}).then(() => { refreshRace(); window.open('/export_race', '_blank'); }); }
+        function newRace() { if(confirm('Start completely new race?')) fetch('/new_race', {method:'POST'}).then(refreshRace); }
+        function saveSessionName() {
+            const name = document.getElementById('sessionName').value.trim();
+            fetch('/set_session_name', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name})
+            });
+        }
+        function deleteLap(ts) {
+            if (confirm('Delete this entry?')) {
+                fetch('/delete_lap', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({timestamp: ts})
+                }).then(refreshRace);
+            }
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', e => {
+            if (e.key === ' ' && document.activeElement.tagName !== "INPUT") {
+                e.preventDefault();
+                isRunning ? pauseRace() : startRace();
+            }
+            if (e.key.toLowerCase() === 'r') resetRace();
+            if (e.key.toLowerCase() === 'f') finishRace();
+        });
+
+        window.onload = () => {
+            refreshRace();
+            setInterval(refreshRace, 900);
+        };
+    </script>
+</body>
+</html>
